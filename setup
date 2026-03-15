@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+#
+# setup — Install Scatter: symlinks, shell aliases, and PATH
+#
+# Usage:
+#   ./setup          Install everything
+#   ./setup --undo   Remove everything
+#
+set -euo pipefail
+
+SCATTER_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$SCATTER_DIR/bin"
+SKILLS_DIR="$(dirname "$SCATTER_DIR")"
+MARKER="# scatter"
+
+# --- Dependency checks ---
+
+warn=0
+if ! command -v tmux &>/dev/null; then
+  echo "⚠  tmux is not installed. Scatter requires tmux >= 3.0." >&2
+  warn=1
+fi
+if ! command -v claude &>/dev/null; then
+  echo "⚠  claude CLI is not installed. Scatter requires Claude Code." >&2
+  warn=1
+fi
+if ! command -v git &>/dev/null; then
+  echo "⚠  git is not installed." >&2
+  warn=1
+fi
+[[ $warn -eq 1 ]] && echo "" >&2
+
+# --- Detect shell config ---
+
+if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
+  RC_FILE="$HOME/.zshrc"
+elif [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == */bash ]]; then
+  RC_FILE="$HOME/.bashrc"
+else
+  echo "Unsupported shell: $SHELL" >&2
+  echo "Manually add to your shell config:" >&2
+  echo "" >&2
+  echo "  scatter() { if [ -n \"\$TMUX\" ]; then tmux new-window -n commander \"claude --agent scatter\"; else tmux new-session -s command-station -n commander \"claude --agent scatter\" 2>/dev/null || tmux attach -t command-station; fi; }" >&2
+  echo "  export PATH=\"$BIN_DIR:\$PATH\"" >&2
+  exit 1
+fi
+
+# --- Undo ---
+
+if [[ "${1:-}" == "--undo" ]]; then
+  # Remove shell aliases
+  if grep -q "$MARKER" "$RC_FILE" 2>/dev/null; then
+    if sed --version 2>/dev/null | grep -q GNU; then
+      sed -i "/$MARKER/,/$MARKER end/d" "$RC_FILE"
+    else
+      sed -i '' "/$MARKER/,/$MARKER end/d" "$RC_FILE"
+    fi
+    echo "Removed shell aliases from $RC_FILE"
+  fi
+
+  # Remove symlinks
+  for skill in scatter-launch spawn-team station; do
+    link="$SKILLS_DIR/$skill"
+    if [[ -L "$link" ]]; then
+      rm "$link"
+      echo "Removed symlink $link"
+    fi
+  done
+
+  echo "Done. Run: source $RC_FILE"
+  exit 0
+fi
+
+# --- Create skill symlinks ---
+
+for skill in scatter-launch spawn-team station; do
+  link="$SKILLS_DIR/$skill"
+  target="$SCATTER_DIR/skills/$skill"
+  if [[ -L "$link" ]]; then
+    # Already a symlink — update if target changed
+    current="$(readlink "$link")"
+    if [[ "$current" != "$target" ]]; then
+      rm "$link"
+      ln -s "$target" "$link"
+      echo "Updated symlink: $link → $target"
+    fi
+  elif [[ -e "$link" ]]; then
+    echo "Warning: $link already exists and is not a symlink. Skipping." >&2
+  else
+    ln -s "$target" "$link"
+    echo "Created symlink: $link → $target"
+  fi
+done
+
+# --- Shell aliases ---
+
+BLOCK="$MARKER
+scatter() { if [ -n \"\$TMUX\" ]; then tmux new-window -n commander \"claude --agent scatter\"; else tmux new-session -s command-station -n commander \"claude --agent scatter\" 2>/dev/null || tmux attach -t command-station; fi; }
+export PATH=\"$BIN_DIR:\$PATH\"
+$MARKER end"
+
+if grep -q "$MARKER" "$RC_FILE" 2>/dev/null; then
+  echo "Shell aliases already in $RC_FILE"
+else
+  echo "" >> "$RC_FILE"
+  echo "$BLOCK" >> "$RC_FILE"
+  echo "Added shell aliases to $RC_FILE"
+fi
+
+# --- Done ---
+
+echo ""
+echo "Scatter installed."
+echo ""
+echo "If you're in tmux, run /scatter to open a new command station."
+echo "Otherwise, run 'scatter' from your terminal (after: source $RC_FILE)."

@@ -1,0 +1,34 @@
+# Command Station — Project Registry
+# Copy to station.toml and fill in your projects/repos.
+# station.toml is gitignored — your project names stay local.
+
+[settings]
+# Per-project vault paths (no shared vault root — project isolation by design)
+# Each project gets its own Obsidian vault or vault subdirectory.
+# journal_subdir is the folder within each project vault for session logs.
+journal_subdir = "journal"
+# Optional: shared journal path — fallback when per-project journal dir doesn't exist.
+# Entries are filtered by #project tag. Remove once you migrate to per-project journals.
+# shared_journal_path = "~/Documents/vaults/my-vault/journal"
+
+[projects.acme]
+display_name = "Acme Corp"
+vault_path = "~/Documents/vaults/acme"
+tags = ["billing", "dashboard", "api"]
+
+[projects.acme.repos.app]
+path = "~/code/acme/app"
+description = "Main web application"
+
+[projects.acme.repos.api]
+path = "~/code/acme/api"
+description = "REST API service"
+
+# [projects.other]
+# display_name = "Other Project"
+# vault_path = "~/Documents/vaults/other"
+# tags = ["keyword1", "keyword2"]
+#
+# [projects.other.repos.site]
+# path = "~/code/other/site"
+# description = "Marketing site"

@@ -1,0 +1,462 @@
+#!/usr/bin/env bash
+#
+# vault — Obsidian vault adapter with per-project vault isolation
+#
+# Each project in station.toml has its own vault_path.
+# This script reads from those vaults to surface journal entries,
+# context briefings, and search results.
+#
+# Usage:
+#   vault status <project|all>          Last 3 journal outcomes per project
+#   vault journal <project> [N]         Last N full journal entries (default: 5)
+#   vault briefing <project>            Curated context package for a team lead
+#   vault search <project> <query>      Grep across a project's vault
+#   vault update-status <project>       Regenerate STATUS.md in project vault dir
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOML_FILE="${SCRIPT_DIR}/../station.toml"
+
+if [[ ! -f "$TOML_FILE" ]]; then
+    echo "Error: station.toml not found at $TOML_FILE" >&2
+    echo "Copy station.example.toml to station.toml and configure your projects." >&2
+    exit 1
+fi
+
+# ─── TOML parsing helpers ───────────────────────────────────────────
+# Minimal awk parsing — works on both macOS and Linux, no dependencies.
+
+# Get a value from [settings] section
+get_setting() {
+    local key="$1"
+    awk -v key="$key" '
+        /^\[settings\]/ { in_section=1; next }
+        /^\[/ { in_section=0 }
+        in_section && $0 ~ "^" key " *= *" {
+            sub("^" key " *= *", "")
+            gsub(/^"|"$/, "")
+            print
+        }
+    ' "$TOML_FILE"
+}
+
+# Get a value from [projects.<name>] section (exact match, not sub-tables)
+get_project_field() {
+    local project="$1" key="$2"
+    awk -v project="$project" -v key="$key" '
+        $0 == "[projects." project "]" { in_section=1; next }
+        /^\[/ { in_section=0 }
+        in_section && $0 ~ "^" key " *= *" {
+            sub("^" key " *= *", "")
+            gsub(/^"|"$/, "")
+            print
+        }
+    ' "$TOML_FILE"
+}
+
+# List all project names from [projects.<name>] headers (excludes .repos sub-tables)
+list_projects() {
+    awk -F'[].[]' '/^\[projects\.[a-zA-Z0-9_-]+\]$/ { print $3 }' "$TOML_FILE"
+}
+
+# Resolve vault path for a project (env override, then station.toml, with ~ expansion)
+resolve_vault_path() {
+    local project="$1"
+    local env_var="OBSIDIAN_VAULT_$(echo "$project" | tr '[:lower:]-' '[:upper:]_')"
+    local path="${!env_var:-}"
+
+    if [[ -z "$path" ]]; then
+        path=$(get_project_field "$project" "vault_path")
+    fi
+
+    if [[ -z "$path" ]]; then
+        echo "Error: no vault_path for project '$project'" >&2
+        return 1
+    fi
+
+    # Expand ~
+    echo "${path/#\~/$HOME}"
+}
+
+# Get journal subdirectory name from settings (default: "journal")
+journal_subdir() {
+    local sub
+    sub=$(get_setting "journal_subdir")
+    echo "${sub:-journal}"
+}
+
+# ─── Journal parsing ────────────────────────────────────────────────
+# Journal entries are delimited by ## YYYY-MM-DD headings in markdown files.
+# Two modes: per-project journal dir, or shared journal with #project tag filtering.
+
+# Resolve the journal directory for a project.
+# Priority: <vault_path>/journal_subdir → shared_journal_path fallback
+resolve_journal_dir() {
+    local project="$1"
+    local vault_path journal_dir
+
+    vault_path=$(resolve_vault_path "$project") || return 1
+    journal_dir="${vault_path}/$(journal_subdir)"
+
+    if [[ -d "$journal_dir" ]]; then
+        echo "$journal_dir"
+        echo ""  # empty = no tag filter needed
+        return 0
+    fi
+
+    # Fallback: shared journal with tag filtering
+    local shared
+    shared=$(get_setting "shared_journal_path")
+    if [[ -n "$shared" ]]; then
+        shared="${shared/#\~/$HOME}"
+        if [[ -d "$shared" ]]; then
+            echo "$shared"
+            echo "#${project}"  # tag to filter by
+            return 0
+        fi
+    fi
+
+    echo "" # no journal dir found
+    echo ""
+    return 1
+}
+
+# Extract entries from journal files. If tag_filter is set, only return entries containing that tag.
+extract_entries_from_files() {
+    local files="$1" count="$2" tag_filter="$3"
+    local collected=0
+
+    while IFS= read -r file; do
+        [[ $collected -ge $count ]] && break
+        [[ -z "$file" ]] && continue
+
+        while IFS= read -r -d $'\x1e' entry; do
+            [[ $collected -ge $count ]] && break
+            [[ -z "$entry" ]] && continue
+
+            # If tag filtering, skip entries that don't contain the tag
+            if [[ -n "$tag_filter" ]]; then
+                echo "$entry" | grep -q "$tag_filter" || continue
+            fi
+
+            echo "$entry"
+            echo ""
+            collected=$((collected + 1))
+        done < <(awk '
+            /^## [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
+                if (buf != "") entries[++n] = buf
+                buf = $0 "\n"
+                next
+            }
+            buf != "" { buf = buf $0 "\n" }
+            END {
+                if (buf != "") entries[++n] = buf
+                for (i=n; i>=1; i--) {
+                    printf "%s", entries[i]
+                    printf "\x1e"
+                }
+            }
+        ' "$file")
+    done <<< "$files"
+
+    if [[ $collected -eq 0 ]]; then
+        echo "(no dated entries found)"
+    fi
+}
+
+# Extract the last N journal entries from a project's vault.
+get_journal_entries() {
+    local project="$1" count="${2:-5}"
+    local journal_info journal_dir tag_filter
+
+    # resolve_journal_dir outputs two lines: dir path and tag filter
+    journal_info=$(resolve_journal_dir "$project" 2>/dev/null) || {
+        echo "(no journal directory found for $project)"
+        return 0
+    }
+    journal_dir=$(echo "$journal_info" | head -1)
+    tag_filter=$(echo "$journal_info" | tail -1)
+
+    if [[ -z "$journal_dir" || ! -d "$journal_dir" ]]; then
+        echo "(no journal directory found for $project)"
+        return 0
+    fi
+
+    local files
+    files=$(find "$journal_dir" -maxdepth 1 -name '*.md' -type f 2>/dev/null | sort -r)
+
+    if [[ -z "$files" ]]; then
+        echo "(no journal files found)"
+        return 0
+    fi
+
+    extract_entries_from_files "$files" "$count" "$tag_filter"
+}
+
+# Get compact status lines — last 3 outcomes per project (~5 lines each)
+get_status_lines() {
+    local project="$1"
+    local journal_info journal_dir tag_filter
+
+    journal_info=$(resolve_journal_dir "$project" 2>/dev/null) || {
+        echo "  (no journal directory)"
+        return 0
+    }
+    journal_dir=$(echo "$journal_info" | head -1)
+    tag_filter=$(echo "$journal_info" | tail -1)
+
+    if [[ -z "$journal_dir" || ! -d "$journal_dir" ]]; then
+        echo "  (no journal directory)"
+        return 0
+    fi
+
+    local files
+    files=$(find "$journal_dir" -maxdepth 1 -name '*.md' -type f 2>/dev/null | sort -r)
+
+    if [[ -z "$files" ]]; then
+        echo "  (no journal files)"
+        return 0
+    fi
+
+    # Extract heading + Outcome from last 3 entries using awk
+    local collected=0
+    while IFS= read -r file; do
+        [[ $collected -ge 3 ]] && break
+        [[ -z "$file" ]] && continue
+
+        # Parse entries in reverse, extract date/title + outcome
+        while IFS= read -r line; do
+            [[ $collected -ge 3 ]] && break
+            # Each line from awk: "date_title|||outcome|||full_entry"
+            local date_title="${line%%|||*}"
+            local rest="${line#*|||}"
+            local outcome="${rest%%|||*}"
+            local full_entry="${rest#*|||}"
+
+            # If tag filtering, skip entries that don't match
+            if [[ -n "$tag_filter" && "$full_entry" != *"$tag_filter"* ]]; then
+                continue
+            fi
+
+            echo "  ${date_title}"
+            if [[ -n "$outcome" && "$outcome" != "$date_title" ]]; then
+                echo "    → ${outcome}"
+            fi
+            collected=$((collected + 1))
+        done < <(awk '
+            /^## [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
+                if (heading != "") {
+                    # Escape newlines in full_buf for transport
+                    gsub(/\n/, "\\n", full_buf)
+                    entries[++n] = heading "|||" outcome "|||" full_buf
+                }
+                heading = $0
+                sub(/^## /, "", heading)
+                outcome = ""
+                full_buf = $0
+                next
+            }
+            {
+                full_buf = full_buf "\n" $0
+            }
+            /^\*\*Outcome:\*\*/ {
+                outcome = $0
+                sub(/^\*\*Outcome:\*\* */, "", outcome)
+            }
+            END {
+                if (heading != "") {
+                    gsub(/\n/, "\\n", full_buf)
+                    entries[++n] = heading "|||" outcome "|||" full_buf
+                }
+                for (i=n; i>=1; i--) print entries[i]
+            }
+        ' "$file")
+    done <<< "$files"
+
+    if [[ $collected -eq 0 ]]; then
+        echo "  (no dated entries)"
+    fi
+}
+
+# ─── Subcommands ────────────────────────────────────────────────────
+
+cmd_status() {
+    local target="${1:-all}"
+
+    if [[ "$target" == "all" ]]; then
+        while IFS= read -r project; do
+            local display_name
+            display_name=$(get_project_field "$project" "display_name")
+            echo "[$project] ${display_name:-$project}"
+            get_status_lines "$project"
+            echo ""
+        done < <(list_projects)
+    else
+        local display_name
+        display_name=$(get_project_field "$target" "display_name")
+        echo "[$target] ${display_name:-$target}"
+        get_status_lines "$target"
+    fi
+}
+
+cmd_journal() {
+    local project="$1" count="${2:-5}"
+    local display_name
+    display_name=$(get_project_field "$project" "display_name")
+    echo "# Journal: ${display_name:-$project} (last $count entries)"
+    echo ""
+    get_journal_entries "$project" "$count"
+}
+
+cmd_briefing() {
+    local project="$1"
+    local vault_path
+    vault_path=$(resolve_vault_path "$project") || return 1
+    local display_name
+    display_name=$(get_project_field "$project" "display_name")
+
+    echo "# Briefing: ${display_name:-$project}"
+    echo ""
+
+    # 1. Client vault README
+    if [[ -f "${vault_path}/README.md" ]]; then
+        echo "## Vault README"
+        echo ""
+        head -60 "${vault_path}/README.md"
+        echo ""
+    fi
+
+    # 2. STATUS.md if present
+    if [[ -f "${vault_path}/STATUS.md" ]]; then
+        echo "## Current Status"
+        echo ""
+        cat "${vault_path}/STATUS.md"
+        echo ""
+    fi
+
+    # 3. Recent journal outcomes
+    echo "## Recent Activity"
+    echo ""
+    get_journal_entries "$project" 3
+    echo ""
+
+    # 4. Knowledge files (top-level .md files in vault, excluding journal/README/STATUS)
+    local knowledge_files
+    knowledge_files=$(find "$vault_path" -maxdepth 1 -name '*.md' -type f \
+        ! -name 'README.md' ! -name 'STATUS.md' 2>/dev/null | sort)
+
+    if [[ -n "$knowledge_files" ]]; then
+        echo "## Knowledge Files"
+        echo ""
+        while IFS= read -r kf; do
+            local fname
+            fname=$(basename "$kf" .md)
+            echo "### $fname"
+            head -40 "$kf"
+            echo ""
+        done <<< "$knowledge_files"
+    fi
+
+    # 5. MEMORY.md from Claude's project memory (if any repo matches)
+    local repos_section
+    repos_section=$(awk -v project="$project" '
+        $0 ~ "^\\[projects\\." project "\\.repos\\." { in_repo=1; next }
+        /^\[/ { in_repo=0 }
+        in_repo && /^path *= */ {
+            sub(/^path *= */, "")
+            gsub(/"/, "")
+            print
+        }
+    ' "$TOML_FILE")
+
+    if [[ -n "$repos_section" ]]; then
+        echo "## Claude Memory"
+        echo ""
+        while IFS= read -r repo_path; do
+            repo_path="${repo_path/#\~/$HOME}"
+            # Claude stores project memory at ~/.claude/projects/<encoded-path>/memory/
+            local encoded_path
+            encoded_path=$(echo "$repo_path" | sed 's|/|-|g; s|^-||')
+            local memory_file="$HOME/.claude/projects/${encoded_path}/memory/MEMORY.md"
+
+            if [[ -f "$memory_file" ]]; then
+                echo "### $(basename "$repo_path")"
+                cat "$memory_file"
+                echo ""
+            fi
+        done <<< "$repos_section"
+    fi
+}
+
+cmd_search() {
+    local project="$1" query="$2"
+    local vault_path
+    vault_path=$(resolve_vault_path "$project") || return 1
+
+    echo "Searching [$project] vault for: $query"
+    echo ""
+    grep -rn --include='*.md' -iF "$query" "$vault_path" 2>/dev/null | head -50 || echo "(no matches)"
+}
+
+cmd_update_status() {
+    local project="$1"
+    local vault_path
+    vault_path=$(resolve_vault_path "$project") || return 1
+    local display_name
+    display_name=$(get_project_field "$project" "display_name")
+    local status_file="${vault_path}/STATUS.md"
+
+    # Build STATUS.md from latest journal entries
+    {
+        echo "# ${display_name:-$project} — Status"
+        echo ""
+        echo "_Auto-generated by \`vault update-status\` on $(date '+%Y-%m-%d %H:%M')_"
+        echo ""
+        echo "## Recent Sessions"
+        echo ""
+        get_status_lines "$project"
+        echo ""
+        echo "## Last Full Entry"
+        echo ""
+        get_journal_entries "$project" 1
+    } > "$status_file"
+
+    echo "Updated: $status_file"
+}
+
+# ─── Dispatch ───────────────────────────────────────────────────────
+
+case "${1:-help}" in
+    status)
+        cmd_status "${2:-all}"
+        ;;
+    journal)
+        [[ -z "${2:-}" ]] && { echo "Usage: vault journal <project> [N]" >&2; exit 1; }
+        cmd_journal "$2" "${3:-5}"
+        ;;
+    briefing)
+        [[ -z "${2:-}" ]] && { echo "Usage: vault briefing <project>" >&2; exit 1; }
+        cmd_briefing "$2"
+        ;;
+    search)
+        [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: vault search <project> <query>" >&2; exit 1; }
+        cmd_search "$2" "$3"
+        ;;
+    update-status)
+        [[ -z "${2:-}" ]] && { echo "Usage: vault update-status <project>" >&2; exit 1; }
+        cmd_update_status "$2"
+        ;;
+    *)
+        echo "Usage: vault <command>"
+        echo ""
+        echo "Obsidian vault adapter — per-project vault isolation."
+        echo ""
+        echo "Commands:"
+        echo "  status <project|all>       Last 3 journal outcomes per project"
+        echo "  journal <project> [N]      Last N full journal entries (default: 5)"
+        echo "  briefing <project>         Curated context package for a team lead"
+        echo "  search <project> <query>   Grep across a project's vault"
+        echo "  update-status <project>    Regenerate STATUS.md in project vault dir"
+        ;;
+esac
