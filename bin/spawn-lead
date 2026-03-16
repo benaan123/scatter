@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+#
+# spawn-lead — Create a team lead as a live pane in window 0 (command station)
+#
+# Layout: Scatter command station full-left, team leads stacked right.
+# Team leads are real interactive sessions — use Ctrl+b z to zoom.
+#
+# Usage:
+#   spawn-lead --name <team-name> --cwd <path> --prompt <prompt> \
+#     [--permission-mode <mode>] [--model <model>] [--worktree <branch>] \
+#     [--context <project>]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SESSION="${TMUX_SESSION:-command-station}"
+LEDGER_DIR="${HOME}/.local/share/scatter"
+LEDGER="${LEDGER_DIR}/ledger.jsonl"
+PERMISSION_MODE="acceptEdits"
+MODEL=""
+NAME=""
+CWD=""
+PROMPT=""
+WORKTREE=""
+CONTEXT=""
+OUTPUT_PATH=""
+SHAPE=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --name) NAME="$2"; shift 2 ;;
+        --cwd) CWD="$2"; shift 2 ;;
+        --prompt) PROMPT="$2"; shift 2 ;;
+        --permission-mode) PERMISSION_MODE="$2"; shift 2 ;;
+        --model) MODEL="$2"; shift 2 ;;
+        --worktree) WORKTREE="$2"; shift 2 ;;
+        --context) CONTEXT="$2"; shift 2 ;;
+        --output-path) OUTPUT_PATH="$2"; shift 2 ;;
+        --shape) SHAPE="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+if [[ -z "$NAME" || -z "$PROMPT" ]]; then
+    echo "Usage: spawn-lead --name <name> --cwd <path> --prompt <prompt> [--worktree <branch>] [--context <project>] [--output-path <path>]" >&2
+    exit 1
+fi
+
+if [[ ! "$NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$ ]]; then
+    echo "Error: --name must be alphanumeric with hyphens/underscores (1-64 chars)" >&2
+    exit 1
+fi
+
+CWD="${CWD:-$HOME}"
+CWD=$(cd "$CWD" 2>/dev/null && pwd || echo "$CWD")
+[[ -d "$CWD" ]] || { echo "Error: --cwd path does not exist: $CWD" >&2; exit 1; }
+
+# --- Worktree setup ---
+EFFECTIVE_CWD="$CWD"
+if [[ -n "$WORKTREE" ]]; then
+    WORKTREE_DIR="${CWD}/.worktrees/${NAME}"
+    mkdir -p "$(dirname "$WORKTREE_DIR")"
+
+    if [[ -d "$WORKTREE_DIR" ]]; then
+        echo "Worktree already exists at $WORKTREE_DIR, reusing" >&2
+    else
+        if git -C "$CWD" rev-parse --is-inside-work-tree &>/dev/null; then
+            git -C "$CWD" worktree add -b "$WORKTREE" "$WORKTREE_DIR" \
+                || git -C "$CWD" worktree add "$WORKTREE_DIR" "$WORKTREE" 2>/dev/null \
+                || { echo "Failed to create worktree for branch '$WORKTREE'" >&2; exit 1; }
+            echo "Created worktree: $WORKTREE_DIR (branch: $WORKTREE)" >&2
+        else
+            echo "Error: --worktree requires --cwd to be a git repo" >&2
+            exit 1
+        fi
+    fi
+    EFFECTIVE_CWD="$WORKTREE_DIR"
+fi
+
+# --- Context injection ---
+if [[ -n "$CONTEXT" ]]; then
+    CONTEXT_BLOCK=$("$SCRIPT_DIR/context-pack" --project "$CONTEXT" --repo "$EFFECTIVE_CWD" 2>&1) || {
+        echo "Warning: context-pack failed for project '$CONTEXT'" >&2
+    }
+    if [[ -n "$CONTEXT_BLOCK" ]]; then
+        PROMPT="${CONTEXT_BLOCK}
+
+${PROMPT}"
+    fi
+fi
+
+# --- Output path injection ---
+if [[ -n "$OUTPUT_PATH" ]]; then
+    OUTPUT_PATH="${OUTPUT_PATH/#\~/$HOME}"
+    mkdir -p "$OUTPUT_PATH"
+    OUTPUT_FILE="${OUTPUT_PATH}/${NAME}.md"
+    STATUS_FILE="${OUTPUT_PATH}/${NAME}.status.json"
+    PROMPT="${PROMPT}
+
+<output-instructions>
+## Status tracking
+Write status updates to: ${STATUS_FILE}
+Format: {\"status\": \"running|blocked|done\", \"message\": \"brief status\", \"updated\": \"ISO timestamp\"}
+
+- Write {\"status\": \"running\", \"message\": \"starting work\", \"updated\": \"<now>\"} IMMEDIATELY when you begin
+- Update to {\"status\": \"blocked\", \"message\": \"<reason>\", \"updated\": \"<now>\"} if you need input or hit an obstacle
+- Update to {\"status\": \"done\", \"message\": \"<summary>\", \"updated\": \"<now>\"} when finished
+
+## Output file
+When you finish your work, write a structured summary of your findings to: ${OUTPUT_FILE}
+
+Use this format:
+# [Team Name] — Findings
+
+**Status:** completed | partial | blocked
+**Summary:** 1-2 sentence overview
+
+## What was done
+- Key actions taken
+
+## Findings
+- Key results, decisions, or discoveries
+
+## Recommendations
+- What should happen next
+
+## Artifacts
+- Files created or modified
+- PRs opened
+- Branches committed to
+</output-instructions>"
+fi
+
+# --- JSON escaping helper ---
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n'; }
+
+# --- Write prompt to a separate temp file (never shell-interpreted) ---
+PROMPT_FILE=$(mktemp /tmp/scatter-prompt.XXXXXX.txt)
+printf '%s' "$PROMPT" > "$PROMPT_FILE"
+chmod 600 "$PROMPT_FILE"
+
+# --- Write a launcher script with all values baked in ---
+LAUNCHER=$(mktemp /tmp/scatter-spawn-launcher.XXXXXX.sh)
+chmod 700 "$LAUNCHER"
+
+# Status file for the orchestrator to detect completion
+STATUS_DIR="/tmp/scatter-status"
+mkdir -p "$STATUS_DIR"
+
+# Build the launcher with values substituted safely.
+# Only simple, validated values are interpolated (paths, names, modes).
+# The prompt is read from PROMPT_FILE at runtime — never embedded in shell.
+cat > "$LAUNCHER" <<LAUNCHER_EOF
+#!/usr/bin/env bash
+PROMPT_FILE="$PROMPT_FILE"
+LAUNCHER_SELF="$LAUNCHER"
+EFFECTIVE_CWD="$EFFECTIVE_CWD"
+STATUS_DIR="$STATUS_DIR"
+NAME="$NAME"
+PERMISSION_MODE="$PERMISSION_MODE"
+MODEL="$MODEL"
+LEDGER_DIR="$LEDGER_DIR"
+LEDGER="$LEDGER"
+
+trap 'rm -f "\$LAUNCHER_SELF" "\$PROMPT_FILE"' EXIT INT TERM
+cd "\$EFFECTIVE_CWD"
+
+# Signal that this team lead is running
+echo "running" > "\${STATUS_DIR}/\${NAME}"
+
+# Build claude command — positional prompt arg with --teammate-mode keeps it interactive
+CMD=(claude --permission-mode "\$PERMISSION_MODE" --teammate-mode in-process)
+[[ -n "\$MODEL" ]] && CMD+=(--model "\$MODEL")
+CMD+=("\$(cat "\$PROMPT_FILE")")
+
+"\${CMD[@]}"
+
+EXIT_CODE=\$?
+
+# Signal completion
+echo "done:\$EXIT_CODE" > "\${STATUS_DIR}/\${NAME}"
+
+# Record completion in durable ledger
+json_escape() { printf '%s' "\$1" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g; s/\\t/\\\\t/g' | tr -d '\\n'; }
+ESCAPED_NAME=\$(json_escape "\$NAME")
+mkdir -p "\$LEDGER_DIR"
+printf '{"ts":"%s","event":"team_done","team":"%s","exit_code":%d}\\n' \\
+  "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" "\$ESCAPED_NAME" "\$EXIT_CODE" >> "\$LEDGER"
+LAUNCHER_EOF
+
+# ============================================================
+# Create the team lead pane in window 0 (the command station)
+# Layout: Scatter full-left, team leads stacked on the right
+# Uses mkdir-based atomic lock for safe concurrent execution
+# ============================================================
+tmux has-session -t "$SESSION" 2>/dev/null || { echo "Error: tmux session '$SESSION' not found. Run: tmux new-session -s $SESSION" >&2; exit 1; }
+
+# Acquire atomic lock (mkdir is atomic on macOS/Linux, no flock needed)
+LOCK_DIR="/tmp/scatter-tmux.lock.d"
+while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    sleep 0.05
+done
+trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+
+W0_PANE_COUNT=$(tmux list-panes -t "${SESSION}:0" 2>/dev/null | wc -l | tr -d ' ')
+
+if [[ "$W0_PANE_COUNT" -le 1 ]]; then
+    # First team lead: split horizontally (orchestrator left, team lead right)
+    PANE_ID=$(tmux split-window -h -t "${SESSION}:0.0" -P -F '#{pane_id}' "$LAUNCHER")
+else
+    # Subsequent team leads: stack vertically on the right side
+    LAST_PANE=$((W0_PANE_COUNT - 1))
+    PANE_ID=$(tmux split-window -v -t "${SESSION}:0.${LAST_PANE}" -P -F '#{pane_id}' "$LAUNCHER")
+fi
+
+# Name the pane
+tmux select-pane -t "$PANE_ID" -T "$NAME"
+
+# Keep focus on the orchestrator pane
+tmux select-pane -t "${SESSION}:0.0"
+
+# Release lock and clear trap
+rmdir "$LOCK_DIR" 2>/dev/null
+trap - EXIT
+
+# Record spawn in durable ledger
+mkdir -p "$LEDGER_DIR"
+printf '{"ts":"%s","event":"team_spawn","team":"%s","project":"%s","repo":"%s","branch":"%s","pane_id":"%s","output_path":"%s","status_file":"%s","shape":"%s"}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_escape "$NAME")" "$(json_escape "$CONTEXT")" "$(json_escape "$EFFECTIVE_CWD")" "$(json_escape "$WORKTREE")" "$(json_escape "$PANE_ID")" "$(json_escape "${OUTPUT_FILE:-}")" "$(json_escape "${STATUS_FILE:-}")" "$(json_escape "${SHAPE:-}")" >> "$LEDGER"
+
+# Output metadata
+printf '{"pane_id": "%s", "name": "%s", "cwd": "%s", "worktree": "%s"}\n' \
+  "$(json_escape "$PANE_ID")" "$(json_escape "$NAME")" "$(json_escape "$EFFECTIVE_CWD")" "$(json_escape "$WORKTREE")"

@@ -1,0 +1,35 @@
+{
+  "name": "scatter",
+  "owner": {
+    "name": "Benjamin Aanes"
+  },
+  "metadata": {
+    "description": "Scatter your thoughts. Gather the results. A multi-agent command station for creative minds who think across multiple projects simultaneously."
+  },
+  "plugins": [
+    {
+      "name": "scatter",
+      "source": "./",
+      "description": "Spawn and coordinate multiple agent team leads across projects — each thought becomes a running team before the next thought arrives.",
+      "author": {
+        "name": "Benjamin Aanes"
+      },
+      "license": "MIT",
+      "keywords": [
+        "scatter",
+        "agent-teams",
+        "tmux",
+        "multi-agent",
+        "creative",
+        "command-station"
+      ],
+      "category": "workflow",
+      "tags": [
+        "scatter",
+        "agent-teams",
+        "tmux",
+        "worktree"
+      ]
+    }
+  ]
+}

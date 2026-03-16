@@ -1,0 +1,90 @@
+# Command Station — Project Registry
+#
+# Copy this file to station.toml and fill in your projects.
+# station.toml is gitignored — your local paths and project names stay private.
+#
+# The orchestrator uses this registry to:
+#   - Route tasks to the right project/repo
+#   - Inject vault context into team lead prompts
+#   - Surface journal entries and briefings via `vault` commands
+
+[settings]
+# Subdirectory within each project vault where journal files live.
+# Journal files are named YYYY-MM.md with ## YYYY-MM-DD headings.
+journal_subdir = "journal"
+
+# Optional: shared journal path for projects that don't have per-project journals.
+# Entries are filtered by #project-name tag. Remove once you migrate to per-project journals.
+# shared_journal_path = "~/Documents/vaults/my-vault/journal"
+
+# ─── Projects ────────────────────────────────────────────────────────
+#
+# Each [projects.<key>] block registers a project. The key is the short name
+# used in commands: `vault briefing myproject`, `station spawn --project myproject`
+#
+# Fields:
+#   display_name  — Human-readable name (shown in status/briefings)
+#   vault_path    — Obsidian vault or subdirectory for this project's notes
+#   tags          — Keywords for routing tasks to the right project
+#
+# Repos are optional sub-tables: [projects.<key>.repos.<repo-name>]
+#   path          — Absolute path to the git repo
+#   description   — What this repo contains (shown in briefings)
+
+# ─── Example: Client project with vault and multiple repos ───────────
+
+[projects.acme]
+display_name = "Acme Corp"
+vault_path = "~/Documents/vaults/clients/Acme"
+# output_path: where team leads write structured findings (defaults to vault_path/scatter-output)
+output_path = "~/Documents/vaults/clients/Acme/scatter-output"
+tags = ["billing", "dashboard", "api"]
+
+[projects.acme.repos.app]
+path = "~/code/acme/app"
+description = "Main web application (Next.js)"
+
+[projects.acme.repos.api]
+path = "~/code/acme/api"
+description = "REST API service (Python/FastAPI)"
+
+# ─── Example: Personal/tool project — vault optional ─────────────────
+
+# [projects.my-tool]
+# display_name = "My CLI Tool"
+# vault_path = "~/Documents/vaults/personal/my-tool"
+# output_path = "~/Documents/vaults/personal/my-tool/scatter-output"
+# tags = ["cli", "tooling", "productivity"]
+#
+# [projects.my-tool.repos.main]
+# path = "~/code/my-tool"
+# description = "Main repository"
+
+# ─── Example: Multi-repo project ─────────────────────────────────────
+
+# [projects.platform]
+# display_name = "Platform"
+# vault_path = "~/Documents/vaults/platform"
+# tags = ["infra", "deploy", "k8s", "monitoring"]
+#
+# [projects.platform.repos.api]
+# path = "~/code/platform/api"
+# description = "API gateway"
+#
+# [projects.platform.repos.web]
+# path = "~/code/platform/web"
+# description = "Admin dashboard"
+#
+# [projects.platform.repos.infra]
+# path = "~/code/platform/infra"
+# description = "Terraform + Helm charts"
+
+# ─── Example: Project without a vault ────────────────────────────────
+
+# [projects.oss-contrib]
+# display_name = "OSS Contributions"
+# tags = ["open-source", "upstream"]
+#
+# [projects.oss-contrib.repos.project]
+# path = "~/code/some-oss-project"
+# description = "Fork with my patches"

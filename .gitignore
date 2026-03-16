@@ -1,0 +1,8 @@
+station.toml
+.worktrees/
+docs/
+.claude/
+*.log
+.env
+.env.*
+!.env.example

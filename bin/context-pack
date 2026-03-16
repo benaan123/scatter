@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#
+# context-pack — Assemble a context block for team lead prompts
+#
+# Reads station.toml for project metadata, pulls vault briefing,
+# repo CLAUDE.md, and Claude memory, then outputs a single markdown
+# block wrapped in <project-context> tags (~2000 line cap).
+#
+# Usage:
+#   context-pack --project <name> --repo <path>
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOML_FILE="${SCRIPT_DIR}/../station.toml"
+VAULT_CMD="${SCRIPT_DIR}/vault"
+MAX_LINES=2000
+
+PROJECT=""
+REPO_PATH=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --project) PROJECT="$2"; shift 2 ;;
+        --repo)   REPO_PATH="$2"; shift 2 ;;
+        *)        echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+if [[ -z "$PROJECT" || -z "$REPO_PATH" ]]; then
+    echo "Usage: context-pack --project <name> --repo <path>" >&2
+    exit 1
+fi
+
+if [[ ! -f "$TOML_FILE" ]]; then
+    echo "Error: station.toml not found at $TOML_FILE" >&2
+    exit 1
+fi
+
+# Resolve repo path
+REPO_PATH="${REPO_PATH/#\~/$HOME}"
+REPO_PATH=$(cd "$REPO_PATH" 2>/dev/null && pwd || echo "$REPO_PATH")
+
+# ─── TOML helpers (macOS/Linux compatible) ──────────────────────────
+
+get_project_field() {
+    local project="$1" key="$2"
+    awk -v project="$project" -v key="$key" '
+        $0 == "[projects." project "]" { in_section=1; next }
+        /^\[/ { in_section=0 }
+        in_section && $0 ~ "^" key " *= *" {
+            sub("^" key " *= *", "")
+            gsub(/^"|"$/, "")
+            print
+        }
+    ' "$TOML_FILE"
+}
+
+# ─── Collect context into a buffer ──────────────────────────────────
+
+buf=""
+
+append() {
+    buf="${buf}${1}"$'\n'
+}
+
+append "<project-context>"
+append ""
+
+# 1. Client metadata from station.toml
+display_name=$(get_project_field "$PROJECT" "display_name")
+tags=$(get_project_field "$PROJECT" "tags")
+vault_path=$(get_project_field "$PROJECT" "vault_path")
+output_path=$(get_project_field "$PROJECT" "output_path")
+
+# Resolve output_path default
+if [[ -z "$output_path" && -n "$vault_path" ]]; then
+    output_path="${vault_path}/scatter-output"
+fi
+
+append "## Client: ${display_name:-$PROJECT}"
+if [[ -n "$tags" ]]; then
+    append "Tags: ${tags}"
+fi
+if [[ -n "$vault_path" ]]; then
+    append "Vault: ${vault_path}"
+fi
+if [[ -n "$output_path" ]]; then
+    append "Output path: ${output_path}"
+fi
+append ""
+
+# 2. Vault briefing (via bin/vault)
+if [[ -x "$VAULT_CMD" ]]; then
+    briefing=$("$VAULT_CMD" briefing "$PROJECT" 2>/dev/null || true)
+    if [[ -n "$briefing" ]]; then
+        append "$briefing"
+        append ""
+    fi
+fi
+
+# 3. Today's daily plan (via bin/vault)
+if [[ -x "$VAULT_CMD" ]]; then
+    daily_plan=$("$VAULT_CMD" daily-plan "$PROJECT" 2>/dev/null || true)
+    if [[ -n "$daily_plan" ]]; then
+        append "## Today's Daily Plan"
+        append ""
+        append "$daily_plan"
+        append ""
+    fi
+fi
+
+# 4. Repo's CLAUDE.md
+if [[ -f "${REPO_PATH}/CLAUDE.md" ]]; then
+    append "## Repo Instructions (CLAUDE.md)"
+    append ""
+    append "$(head -200 "${REPO_PATH}/CLAUDE.md")"
+    append ""
+fi
+
+# 5. Claude's project memory (MEMORY.md)
+encoded_path=$(echo "$REPO_PATH" | sed 's|/|-|g; s|^-||')
+memory_file="$HOME/.claude/projects/${encoded_path}/memory/MEMORY.md"
+
+if [[ -f "$memory_file" ]]; then
+    append "## Claude Memory (MEMORY.md)"
+    append ""
+    append "$(cat "$memory_file")"
+    append ""
+fi
+
+append "</project-context>"
+
+# ─── Output with line cap ───────────────────────────────────────────
+
+echo "$buf" | head -"$MAX_LINES"

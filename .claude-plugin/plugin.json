@@ -1,0 +1,25 @@
+{
+  "name": "scatter",
+  "version": "0.2.0",
+  "description": "Scatter your thoughts. Gather the results. A multi-agent command station for creative minds who think across multiple projects simultaneously.",
+  "author": {
+    "name": "Benjamin Aanes"
+  },
+  "repository": "https://github.com/benaan123/scatter",
+  "license": "MIT",
+  "keywords": [
+    "scatter",
+    "agent-teams",
+    "tmux",
+    "multi-agent",
+    "worktree",
+    "command-station",
+    "creative"
+  ],
+  "agents": [
+    "./agents/scatter.md"
+  ],
+  "skills": [
+    "./skills/"
+  ]
+}
