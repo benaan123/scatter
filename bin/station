@@ -10,6 +10,8 @@
 #   station cleanup <team-name>       Kill team + remove its git worktree
 #   station worktrees <repo-path>     List all git worktrees for a repo
 #   station layout                    Re-tile window 0 overview panes
+#   station gather [name] [--save p]  Read structured findings (--save writes to vault)
+#   station briefing                  Morning briefing — last 24h activity summary
 #   station registry                  List all projects/repos from station.toml
 #   station registry --resolve <name> Resolve project/tag to repo paths
 #   station dashboard                 Combined overview (registry + teams + journal)
@@ -545,6 +547,249 @@ cmd_resume() {
     [[ $has_merges -eq 1 ]] && echo ""
 }
 
+cmd_gather() {
+    local target="" save_path=""
+
+    # Parse args: gather [--save <path>] [team-name]
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --save) save_path="$2"; shift 2 ;;
+            *) target="$1"; shift ;;
+        esac
+    done
+
+    if [[ ! -f "$LEDGER" ]]; then
+        echo "No session history found." >&2
+        return 1
+    fi
+
+    local gathered_output=""
+
+    if [[ -n "$target" ]]; then
+        # Gather one team's output
+        local output_path
+        output_path=$(grep "\"team\":\"${target}\"" "$LEDGER" | grep '"event":"team_spawn"' | tail -1 | sed -n 's/.*"output_path":"\([^"]*\)".*/\1/p')
+
+        if [[ -z "$output_path" ]]; then
+            echo "No output path found for team '$target'" >&2
+            echo "Was it spawned with --output-path?" >&2
+            return 1
+        fi
+
+        if [[ ! -f "$output_path" ]]; then
+            echo "Output file not yet written: $output_path" >&2
+            echo "Team may still be working." >&2
+            return 1
+        fi
+
+        # Check status file
+        local status_file="${output_path%.md}.status.json"
+        if [[ -f "$status_file" ]]; then
+            local team_status
+            team_status=$(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' "$status_file")
+            local team_msg
+            team_msg=$(sed -n 's/.*"message":"\([^"]*\)".*/\1/p' "$status_file")
+            echo "=== $target [$team_status] ==="
+            [[ "$team_status" == "blocked" ]] && echo "⚠ BLOCKED: $team_msg" && echo ""
+        else
+            echo "=== $target ==="
+        fi
+        cat "$output_path"
+        echo ""
+        echo "=== end ==="
+        gathered_output="# $target — Findings\n\n$(cat "$output_path")"
+    else
+        # Gather all teams with output paths
+        local found=0 blocked=0
+        local -A seen_teams=()
+
+        while IFS= read -r line; do
+            local evt team output_path
+            evt=$(echo "$line" | sed -n 's/.*"event":"\([^"]*\)".*/\1/p')
+            team=$(echo "$line" | sed -n 's/.*"team":"\([^"]*\)".*/\1/p')
+
+            [[ "$evt" != "team_spawn" ]] && continue
+            [[ -n "${seen_teams[$team]+x}" ]] && continue
+            seen_teams[$team]=1
+
+            output_path=$(echo "$line" | sed -n 's/.*"output_path":"\([^"]*\)".*/\1/p')
+            [[ -z "$output_path" ]] && continue
+
+            # Check status file
+            local status_file="${output_path%.md}.status.json"
+            local team_status="" team_msg=""
+            if [[ -f "$status_file" ]]; then
+                team_status=$(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' "$status_file")
+                team_msg=$(sed -n 's/.*"message":"\([^"]*\)".*/\1/p' "$status_file")
+            fi
+
+            if [[ -f "$output_path" ]]; then
+                if [[ "$team_status" == "blocked" ]]; then
+                    echo "=== $team [BLOCKED] ==="
+                    echo "⚠ $team_msg"
+                    echo ""
+                    blocked=$((blocked + 1))
+                elif [[ -n "$team_status" ]]; then
+                    echo "=== $team [$team_status] ==="
+                else
+                    echo "=== $team ==="
+                fi
+                cat "$output_path"
+                echo ""
+                gathered_output="${gathered_output}\n\n## $team\n\n$(cat "$output_path")"
+                found=$((found + 1))
+            else
+                if [[ "$team_status" == "blocked" ]]; then
+                    echo "=== $team [BLOCKED — no output yet] ==="
+                    echo "⚠ $team_msg"
+                    echo ""
+                    blocked=$((blocked + 1))
+                elif [[ "$team_status" == "running" ]]; then
+                    echo "=== $team === (in progress)"
+                    echo ""
+                else
+                    echo "=== $team === (pending — no output yet)"
+                    echo ""
+                fi
+            fi
+        done < "$LEDGER"
+
+        if [[ $found -eq 0 ]]; then
+            echo "No team outputs found yet."
+            echo "Teams write findings when they complete."
+        else
+            local summary="── Gathered $found team output(s)"
+            [[ $blocked -gt 0 ]] && summary="$summary, $blocked BLOCKED"
+            echo "${summary} ──"
+        fi
+    fi
+
+    # Save consolidated output to vault
+    if [[ -n "$save_path" && -n "$gathered_output" ]]; then
+        save_path="${save_path/#\~/$HOME}"
+        mkdir -p "$save_path"
+        local save_file="${save_path}/gather-$(date +%Y-%m-%d-%H%M).md"
+        {
+            echo "# Scatter Gather — $(date '+%Y-%m-%d %H:%M')"
+            echo ""
+            printf '%b' "$gathered_output"
+            echo ""
+        } > "$save_file"
+        echo ""
+        echo "Saved to: $save_file"
+    fi
+}
+
+cmd_briefing() {
+    if [[ ! -f "$LEDGER" ]]; then
+        echo "No recent activity."
+        return 0
+    fi
+
+    echo "╔══ Morning Briefing ══╗"
+    echo ""
+
+    # Get entries from the last 24 hours
+    local cutoff
+    cutoff=$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+
+    local -A team_event team_ts team_project team_output team_status_file
+    local -a team_order=()
+    local completed=0 running=0 findings=0
+
+    while IFS= read -r line; do
+        local evt team ts
+        evt=$(echo "$line" | sed -n 's/.*"event":"\([^"]*\)".*/\1/p')
+        team=$(echo "$line" | sed -n 's/.*"team":"\([^"]*\)".*/\1/p')
+        ts=$(echo "$line" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')
+
+        [[ -z "$team" ]] && continue
+
+        # Filter to last 24h if we have a cutoff
+        if [[ -n "$cutoff" && "$ts" < "$cutoff" ]]; then
+            continue
+        fi
+
+        if [[ -z "${team_event[$team]+x}" ]]; then
+            team_order+=("$team")
+        fi
+
+        team_event[$team]="$evt"
+        team_ts[$team]="$ts"
+
+        if [[ "$evt" == "team_spawn" ]]; then
+            local project output_path status_file
+            project=$(echo "$line" | sed -n 's/.*"project":"\([^"]*\)".*/\1/p')
+            output_path=$(echo "$line" | sed -n 's/.*"output_path":"\([^"]*\)".*/\1/p')
+            status_file=$(echo "$line" | sed -n 's/.*"status_file":"\([^"]*\)".*/\1/p')
+            team_project[$team]="$project"
+            team_output[$team]="$output_path"
+            team_status_file[$team]="$status_file"
+        fi
+    done < "$LEDGER"
+
+    if [[ ${#team_order[@]} -eq 0 ]]; then
+        echo "  No activity in the last 24 hours."
+        echo ""
+        return 0
+    fi
+
+    for team in "${team_order[@]}"; do
+        local evt="${team_event[$team]}"
+        local label="$team"
+        [[ -n "${team_project[$team]:-}" ]] && label="$team [${team_project[$team]}]"
+
+        case "$evt" in
+            team_done|team_swept|team_merged)
+                completed=$((completed + 1))
+                local marker="✓"
+                [[ "$evt" == "team_merged" ]] && marker="⊕"
+                echo "  $marker $label — $evt at ${team_ts[$team]}"
+                ;;
+            team_spawn)
+                # Check if still running via status file
+                local sf="${team_status_file[$team]:-}"
+                if [[ -n "$sf" && -f "$sf" ]]; then
+                    local st
+                    st=$(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' "$sf")
+                    if [[ "$st" == "done" ]]; then
+                        completed=$((completed + 1))
+                        echo "  ✓ $label — done"
+                    elif [[ "$st" == "blocked" ]]; then
+                        local msg
+                        msg=$(sed -n 's/.*"message":"\([^"]*\)".*/\1/p' "$sf")
+                        echo "  ⚠ $label — BLOCKED: $msg"
+                        running=$((running + 1))
+                    else
+                        echo "  ● $label — running"
+                        running=$((running + 1))
+                    fi
+                else
+                    echo "  ● $label — spawned ${team_ts[$team]}"
+                    running=$((running + 1))
+                fi
+                ;;
+            team_kill)
+                echo "  ✗ $label — killed"
+                ;;
+        esac
+
+        # Show output preview if available
+        local op="${team_output[$team]:-}"
+        if [[ -n "$op" && -f "$op" ]]; then
+            findings=$((findings + 1))
+            local preview
+            preview=$(head -3 "$op" | sed 's/^/    /')
+            echo "$preview"
+        fi
+    done
+
+    echo ""
+    echo "── $completed completed, $running still running, $findings findings available ──"
+    [[ $findings -gt 0 ]] && echo "   Run \`station gather\` to read them"
+    echo ""
+}
+
 cmd_merge() {
     local target="$1"
 
@@ -654,6 +899,11 @@ case "${1:-help}" in
         ;;
     dashboard) cmd_dashboard ;;
     resume) cmd_resume ;;
+    briefing) cmd_briefing ;;
+    gather)
+        shift
+        cmd_gather "$@"
+        ;;
     merge)
         [[ -z "${2:-}" ]] && { echo "Usage: station merge <team-name>" >&2; exit 1; }
         cmd_merge "$2"
@@ -668,6 +918,8 @@ case "${1:-help}" in
         echo "  status [name]             Check team completion status"
         echo "  resume                    Session resume — what happened while you were away"
         echo "  sweep                     Clean up all completed teams"
+        echo "  gather [name] [--save p]  Read team findings (--save writes to vault)"
+        echo "  briefing                  Morning briefing — last 24h activity summary"
         echo "  merge <name>              Merge a team's worktree branch into main"
         echo "  kill <name>               Kill team window + mirror pane"
         echo "  cleanup <name>            Kill team + remove git worktree"

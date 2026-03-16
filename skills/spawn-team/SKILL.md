@@ -34,9 +34,11 @@ SPAWN_LEAD="${SPAWN_LEAD:-./bin/spawn-lead}"
 ## Flags
 
 - `--name` (required): Short identifier for the team. Used as the tmux pane title.
-- `--cwd` (required): Absolute path to the project directory.
+- `--cwd` (required): Absolute path — repo for code tasks, vault path for research/writing tasks.
 - `--prompt` (required): Full instructions for the team lead. Must be self-contained.
-- `--worktree`: Git branch name. Creates an isolated worktree at `<cwd>/.worktrees/<name>/`. **Use when multiple teams target the same repo.**
+- `--output-path`: Directory where the team writes structured findings (e.g., vault's scatter-output/). Team lead gets instructions to write `<output-path>/<name>.md`.
+- `--worktree`: Git branch name. Creates an isolated worktree at `<cwd>/.worktrees/<name>/`. **Use when multiple code teams target the same repo.**
+- `--context`: Project name from station.toml. Injects vault briefing + CLAUDE.md + memory into the prompt.
 - `--permission-mode`: Claude Code permission mode. Default: `acceptEdits`.
 - `--model`: Model override (e.g., `opus`, `sonnet`).
 
@@ -55,13 +57,21 @@ spawn-lead --name team-a --cwd /repo --worktree feat/team-a --prompt "..."
 spawn-lead --name team-b --cwd /repo --worktree feat/team-b --prompt "..."
 ```
 
+## Task types
+
+- **Code tasks**: `--cwd` to repo, use `--worktree` for parallel work, `--output-path` for summary
+- **Research tasks**: `--cwd` to vault path, `--output-path` for findings
+- **Writing tasks**: `--cwd` to vault path, `--output-path` for drafts
+- **GitHub tasks**: `--cwd` to repo, `--output-path` for action summary
+
 ## Prompt guidelines
 
-The team lead is a fresh Claude session. Include:
+The team lead is a fresh Claude Code session with ALL capabilities (web search, gh CLI, plugins). Include:
 1. Role and team name
-2. Project context
-3. Clear objective
-4. Key files and architecture notes
-5. Instructions to create an Agent Team (TeamCreate + teammates)
-6. Git branch info if using worktree
-7. Definition of done
+2. Task type (code, research, writing, github)
+3. Project context
+4. Clear objective
+5. Key files and architecture notes
+6. Instructions to create an Agent Team (TeamCreate + teammates) for complex tasks
+7. Git branch info if using worktree
+8. Definition of done

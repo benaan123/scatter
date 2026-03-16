@@ -2,24 +2,31 @@
 
 This file is for Claude sessions working on the Scatter codebase, not for end users.
 
+## What Scatter Is
+
+A thin orchestration layer above Claude Code for hybrid builders. It does three things: **route** tasks to the right place, **dispatch** Claude Code teams, and **gather** findings back to Obsidian. Each team lead is a full Claude Code session with all capabilities — Scatter doesn't add features, it adds coordination.
+
 ## Architecture
 
 Scatter is a Claude Code skill pack installed at `~/.claude/skills/scatter/` (user-level) or `.claude/skills/scatter/` (project-level). The orchestrator (`agents/scatter.md`) runs in tmux pane 0 and spawns team leads in separate panes. Each team lead is an independent `claude` process — not an in-process subagent.
 
 ```
 User → Orchestrator (pane 0)
-         ├─ bin/spawn-lead → Team Lead A (pane 1, own claude session)
-         ├─ bin/spawn-lead → Team Lead B (pane 2, own claude session)
-         └─ bin/station    → monitors all panes
+         ├─ bin/spawn-lead → Team Lead A (pane 1, code task in repo)
+         ├─ bin/spawn-lead → Team Lead B (pane 2, research task in vault)
+         ├─ bin/spawn-lead → Team Lead C (pane 3, writing task in vault)
+         └─ bin/station    → monitors panes + gathers findings from vault
 ```
 
 The orchestrator is **forbidden** from using TeamCreate/Agent/SendMessage. All team creation goes through `bin/spawn-lead` via the Bash tool. This is the core design decision — separate processes give each team its own context window and let them run in parallel without contention.
 
+**The gather contract:** Every team is spawned with `--output-path`, which tells the team lead where to write structured findings (always in the project's Obsidian vault). `station gather` reads these files back to the orchestrator.
+
 ## Key files
 
 - `agents/scatter.md` — The orchestrator's system prompt. This is the brain. It defines how tasks are parsed, routed, and dispatched.
-- `bin/spawn-lead` — Creates a tmux pane with a new `claude` session. Handles worktree setup, context injection, and ledger recording. Writes the prompt to a temp file (never shell-interpolated) and generates a launcher script.
-- `bin/station` — Team management CLI: list, capture, kill, cleanup, sweep, resume, merge. Reads tmux state and the session ledger.
+- `bin/spawn-lead` — Creates a tmux pane with a new `claude` session. Handles worktree setup, context injection, output path injection, and ledger recording. Writes the prompt to a temp file (never shell-interpolated) and generates a launcher script.
+- `bin/station` — Team management CLI: list, capture, gather, kill, cleanup, sweep, resume, merge. Reads tmux state, the session ledger, and team output files from vault.
 - `bin/context-pack` — Assembles context from station.toml + vault briefing + CLAUDE.md + Claude memory into a single block injected into team lead prompts.
 - `bin/vault` — Obsidian vault adapter. Reads journal entries, generates briefings, searches vaults. All scoped per-project via station.toml.
 - `setup` — Root-level installer: creates skill symlinks, adds shell aliases.
@@ -33,10 +40,19 @@ The orchestrator is **forbidden** from using TeamCreate/Agent/SendMessage. All t
 1. Validates args, resolves `--cwd` to absolute path
 2. If `--worktree`, creates a git worktree at `<repo>/.worktrees/<team-name>/`
 3. If `--context`, runs `context-pack` to prepend vault/project context to the prompt
-4. Writes prompt to a temp file (`/tmp/scatter-prompt.XXXXXX.txt`) — this avoids shell escaping issues with complex prompts
-5. Generates a launcher script (`/tmp/scatter-spawn-launcher.XXXXXX.sh`) with baked-in env vars that reads the prompt file at runtime
-6. Runs the launcher in a new tmux pane via `tmux split-window`
-7. The launcher runs `claude --permission-mode <mode> --teammate-mode in-process "$(cat prompt-file)"`, then writes completion status to `/tmp/scatter-status/<name>` and appends to the durable ledger at `~/.local/share/scatter/ledger.jsonl`
+4. If `--output-path`, injects structured output instructions into the prompt (tells team lead where to write findings)
+5. Writes prompt to a temp file (`/tmp/scatter-prompt.XXXXXX.txt`) — this avoids shell escaping issues with complex prompts
+6. Generates a launcher script (`/tmp/scatter-spawn-launcher.XXXXXX.sh`) with baked-in env vars that reads the prompt file at runtime
+7. Runs the launcher in a new tmux pane via `tmux split-window`
+8. The launcher runs `claude --permission-mode <mode> --teammate-mode in-process "$(cat prompt-file)"`, then writes completion status to `/tmp/scatter-status/<name>` and appends to the durable ledger at `~/.local/share/scatter/ledger.jsonl`
+
+## How gather works
+
+1. Each team is spawned with `--output-path <vault>/scatter-output`
+2. spawn-lead injects `<output-instructions>` into the prompt, telling the team lead to write structured findings to `<output-path>/<team-name>.md`
+3. The output path is recorded in the ledger spawn event
+4. `station gather` reads the ledger to find output paths, then reads the markdown files
+5. The orchestrator presents gathered findings to the user in the main conversation
 
 ## Gotchas
 

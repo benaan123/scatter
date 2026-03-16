@@ -70,10 +70,23 @@ append ""
 # 1. Client metadata from station.toml
 display_name=$(get_project_field "$PROJECT" "display_name")
 tags=$(get_project_field "$PROJECT" "tags")
+vault_path=$(get_project_field "$PROJECT" "vault_path")
+output_path=$(get_project_field "$PROJECT" "output_path")
+
+# Resolve output_path default
+if [[ -z "$output_path" && -n "$vault_path" ]]; then
+    output_path="${vault_path}/scatter-output"
+fi
 
 append "## Client: ${display_name:-$PROJECT}"
 if [[ -n "$tags" ]]; then
     append "Tags: ${tags}"
+fi
+if [[ -n "$vault_path" ]]; then
+    append "Vault: ${vault_path}"
+fi
+if [[ -n "$output_path" ]]; then
+    append "Output path: ${output_path}"
 fi
 append ""
 

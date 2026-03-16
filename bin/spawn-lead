@@ -23,6 +23,7 @@ CWD=""
 PROMPT=""
 WORKTREE=""
 CONTEXT=""
+OUTPUT_PATH=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -33,12 +34,13 @@ while [[ $# -gt 0 ]]; do
         --model) MODEL="$2"; shift 2 ;;
         --worktree) WORKTREE="$2"; shift 2 ;;
         --context) CONTEXT="$2"; shift 2 ;;
+        --output-path) OUTPUT_PATH="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
 if [[ -z "$NAME" || -z "$PROMPT" ]]; then
-    echo "Usage: spawn-lead --name <name> --cwd <path> --prompt <prompt> [--worktree <branch>] [--context <project>]" >&2
+    echo "Usage: spawn-lead --name <name> --cwd <path> --prompt <prompt> [--worktree <branch>] [--context <project>] [--output-path <path>]" >&2
     exit 1
 fi
 
@@ -83,6 +85,48 @@ if [[ -n "$CONTEXT" ]]; then
 
 ${PROMPT}"
     fi
+fi
+
+# --- Output path injection ---
+if [[ -n "$OUTPUT_PATH" ]]; then
+    OUTPUT_PATH="${OUTPUT_PATH/#\~/$HOME}"
+    mkdir -p "$OUTPUT_PATH"
+    OUTPUT_FILE="${OUTPUT_PATH}/${NAME}.md"
+    STATUS_FILE="${OUTPUT_PATH}/${NAME}.status.json"
+    PROMPT="${PROMPT}
+
+<output-instructions>
+## Status tracking
+Write status updates to: ${STATUS_FILE}
+Format: {\"status\": \"running|blocked|done\", \"message\": \"brief status\", \"updated\": \"ISO timestamp\"}
+
+- Write {\"status\": \"running\", \"message\": \"starting work\", \"updated\": \"<now>\"} IMMEDIATELY when you begin
+- Update to {\"status\": \"blocked\", \"message\": \"<reason>\", \"updated\": \"<now>\"} if you need input or hit an obstacle
+- Update to {\"status\": \"done\", \"message\": \"<summary>\", \"updated\": \"<now>\"} when finished
+
+## Output file
+When you finish your work, write a structured summary of your findings to: ${OUTPUT_FILE}
+
+Use this format:
+# [Team Name] — Findings
+
+**Status:** completed | partial | blocked
+**Summary:** 1-2 sentence overview
+
+## What was done
+- Key actions taken
+
+## Findings
+- Key results, decisions, or discoveries
+
+## Recommendations
+- What should happen next
+
+## Artifacts
+- Files created or modified
+- PRs opened
+- Branches committed to
+</output-instructions>"
 fi
 
 # --- JSON escaping helper ---
@@ -167,8 +211,8 @@ tmux select-pane -t "${SESSION}:0.0"
 
 # Record spawn in durable ledger
 mkdir -p "$LEDGER_DIR"
-printf '{"ts":"%s","event":"team_spawn","team":"%s","project":"%s","repo":"%s","branch":"%s","pane_id":"%s"}\n' \
-  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_escape "$NAME")" "$(json_escape "$CONTEXT")" "$(json_escape "$EFFECTIVE_CWD")" "$(json_escape "$WORKTREE")" "$(json_escape "$PANE_ID")" >> "$LEDGER"
+printf '{"ts":"%s","event":"team_spawn","team":"%s","project":"%s","repo":"%s","branch":"%s","pane_id":"%s","output_path":"%s","status_file":"%s"}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_escape "$NAME")" "$(json_escape "$CONTEXT")" "$(json_escape "$EFFECTIVE_CWD")" "$(json_escape "$WORKTREE")" "$(json_escape "$PANE_ID")" "$(json_escape "${OUTPUT_FILE:-}")" "$(json_escape "${STATUS_FILE:-}")" >> "$LEDGER"
 
 # Output metadata
 printf '{"pane_id": "%s", "name": "%s", "cwd": "%s", "worktree": "%s"}\n' \

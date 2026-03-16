@@ -73,6 +73,13 @@ station resume
 ```
 Reads the durable session ledger (`~/.local/share/scatter/ledger.jsonl`) and shows what happened since last session: running teams, completed work, crashed panes, and branches ready to merge. This is the first thing the Scatter orchestrator runs on startup.
 
+### `gather [name]` — Read team findings from output files
+```bash
+station gather              # all teams
+station gather auth-refactor  # one team
+```
+Reads structured findings that team leads wrote to their output paths (in the project's Obsidian vault). This is the "gather" in scatter-gather. Use after teams complete to collect results.
+
 ### `merge <name>` — Merge a team's worktree branch
 ```bash
 station merge auth-refactor
@@ -82,10 +89,7 @@ Merges the team's feature branch into main, removes the worktree, and deletes th
 ## Status check workflow
 
 When asked "how are my teams doing?":
-1. Run `station resume` for the big picture
-2. Run `station capture-all` for detailed progress
-3. For each team's output, identify:
-   - Current phase (planning, implementing, testing, done)
-   - Any permission prompts waiting
-   - Task progress
-4. Summarize concisely
+1. Run `station status` for quick running/done check
+2. For done teams: run `station gather` to read structured findings
+3. For running teams: run `station capture-all` for live progress
+4. Summarize: what's done (with findings), what's still working, any blockers

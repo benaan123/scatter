@@ -14,6 +14,8 @@ journal_subdir = "journal"
 [projects.acme]
 display_name = "Acme Corp"
 vault_path = "~/Documents/vaults/acme"
+# output_path: where team leads write structured findings (defaults to vault_path/scatter-output)
+output_path = "~/Documents/vaults/acme/scatter-output"
 tags = ["billing", "dashboard", "api"]
 
 [projects.acme.repos.app]
@@ -27,6 +29,7 @@ description = "REST API service"
 # [projects.other]
 # display_name = "Other Project"
 # vault_path = "~/Documents/vaults/other"
+# output_path = "~/Documents/vaults/other/scatter-output"
 # tags = ["keyword1", "keyword2"]
 #
 # [projects.other.repos.site]
