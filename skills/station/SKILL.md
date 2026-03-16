@@ -73,6 +73,12 @@ station resume
 ```
 Reads the durable session ledger (`~/.local/share/scatter/ledger.jsonl`) and shows what happened since last session: running teams, completed work, crashed panes, and branches ready to merge. This is the first thing the Scatter orchestrator runs on startup.
 
+### `poll` — Status + auto-gather done teams
+```bash
+station poll
+```
+Shows status of all teams. For any team that's `done`, automatically reads and displays their gathered findings. This is the single command to check on a batch of spawned teams.
+
 ### `gather [name]` — Read team findings from output files
 ```bash
 station gather              # all teams

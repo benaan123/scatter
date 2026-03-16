@@ -24,6 +24,7 @@ PROMPT=""
 WORKTREE=""
 CONTEXT=""
 OUTPUT_PATH=""
+SHAPE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -35,6 +36,7 @@ while [[ $# -gt 0 ]]; do
         --worktree) WORKTREE="$2"; shift 2 ;;
         --context) CONTEXT="$2"; shift 2 ;;
         --output-path) OUTPUT_PATH="$2"; shift 2 ;;
+        --shape) SHAPE="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -211,8 +213,8 @@ tmux select-pane -t "${SESSION}:0.0"
 
 # Record spawn in durable ledger
 mkdir -p "$LEDGER_DIR"
-printf '{"ts":"%s","event":"team_spawn","team":"%s","project":"%s","repo":"%s","branch":"%s","pane_id":"%s","output_path":"%s","status_file":"%s"}\n' \
-  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_escape "$NAME")" "$(json_escape "$CONTEXT")" "$(json_escape "$EFFECTIVE_CWD")" "$(json_escape "$WORKTREE")" "$(json_escape "$PANE_ID")" "$(json_escape "${OUTPUT_FILE:-}")" "$(json_escape "${STATUS_FILE:-}")" >> "$LEDGER"
+printf '{"ts":"%s","event":"team_spawn","team":"%s","project":"%s","repo":"%s","branch":"%s","pane_id":"%s","output_path":"%s","status_file":"%s","shape":"%s"}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_escape "$NAME")" "$(json_escape "$CONTEXT")" "$(json_escape "$EFFECTIVE_CWD")" "$(json_escape "$WORKTREE")" "$(json_escape "$PANE_ID")" "$(json_escape "${OUTPUT_FILE:-}")" "$(json_escape "${STATUS_FILE:-}")" "$(json_escape "${SHAPE:-}")" >> "$LEDGER"
 
 # Output metadata
 printf '{"pane_id": "%s", "name": "%s", "cwd": "%s", "worktree": "%s"}\n' \

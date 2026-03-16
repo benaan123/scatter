@@ -40,6 +40,7 @@ SPAWN_LEAD="${SPAWN_LEAD:-./bin/spawn-lead}"
 - `--worktree`: Git branch name. Creates an isolated worktree at `<cwd>/.worktrees/<name>/`. **Use when multiple code teams target the same repo.**
 - `--context`: Project name from station.toml. Injects vault briefing + CLAUDE.md + memory into the prompt.
 - `--permission-mode`: Claude Code permission mode. Default: `acceptEdits`.
+- `--shape`: Task shape metadata (code/fix/research/write/review/explore/github). Recorded in ledger for status display. Does not change behavior.
 - `--model`: Model override (e.g., `opus`, `sonnet`).
 
 ## Layout

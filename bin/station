@@ -790,6 +790,66 @@ cmd_briefing() {
     echo ""
 }
 
+cmd_poll() {
+    # Combined status + auto-gather for done teams
+    echo "╔══ Poll ══╗"
+    echo ""
+
+    local has_done=0 has_running=0
+
+    if [[ -d "$STATUS_DIR" ]] && ls "$STATUS_DIR"/* &>/dev/null; then
+        for f in "$STATUS_DIR"/*; do
+            local name=$(basename "$f")
+            local state=$(cat "$f")
+            if [[ "$state" == done:* ]]; then
+                has_done=1
+                echo "  ✓ $name ($state)"
+            elif [[ "$state" == "running" ]]; then
+                has_running=1
+                echo "  ● $name (running)"
+            else
+                echo "  ? $name ($state)"
+            fi
+        done
+    else
+        echo "  No active teams."
+        return 0
+    fi
+
+    echo ""
+
+    # Auto-gather done teams
+    if [[ $has_done -eq 1 ]]; then
+        echo "── Gathering completed team findings ──"
+        echo ""
+        if [[ -f "$LEDGER" ]]; then
+            local -A gathered=()
+            for f in "$STATUS_DIR"/*; do
+                local name=$(basename "$f")
+                local state=$(cat "$f")
+                [[ "$state" != done:* ]] && continue
+
+                local output_path
+                output_path=$(grep "\"team\":\"${name}\"" "$LEDGER" | grep '"event":"team_spawn"' | tail -1 | sed -n 's/.*"output_path":"\([^"]*\)".*/\1/p')
+                if [[ -n "$output_path" && -f "$output_path" ]]; then
+                    echo "=== $name ==="
+                    cat "$output_path"
+                    echo ""
+                elif [[ -n "$output_path" ]]; then
+                    echo "=== $name === (output file not yet written: $output_path)"
+                    echo ""
+                fi
+            done
+        fi
+    fi
+
+    if [[ $has_running -eq 1 ]]; then
+        echo "── Some teams still running. Poll again later. ──"
+    elif [[ $has_done -eq 1 ]]; then
+        echo "── All teams done. Run \`station sweep\` to clean up. ──"
+    fi
+}
+
 cmd_merge() {
     local target="$1"
 
@@ -904,6 +964,7 @@ case "${1:-help}" in
         shift
         cmd_gather "$@"
         ;;
+    poll) cmd_poll ;;
     merge)
         [[ -z "${2:-}" ]] && { echo "Usage: station merge <team-name>" >&2; exit 1; }
         cmd_merge "$2"
@@ -918,6 +979,7 @@ case "${1:-help}" in
         echo "  status [name]             Check team completion status"
         echo "  resume                    Session resume — what happened while you were away"
         echo "  sweep                     Clean up all completed teams"
+        echo "  poll                      Status + auto-gather done teams"
         echo "  gather [name] [--save p]  Read team findings (--save writes to vault)"
         echo "  briefing                  Morning briefing — last 24h activity summary"
         echo "  merge <name>              Merge a team's worktree branch into main"
