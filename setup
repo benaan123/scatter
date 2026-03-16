@@ -95,7 +95,13 @@ done
 # --- Shell aliases ---
 
 BLOCK="$MARKER
-scatter() { if [ -n \"\$TMUX\" ]; then tmux new-window -n commander \"claude --agent scatter\"; else tmux new-session -s command-station -n commander \"claude --agent scatter\" 2>/dev/null || tmux attach -t command-station; fi; }
+function scatter {
+  if [ -n \"\$TMUX\" ]; then
+    tmux new-window -n commander \"claude --agent scatter\"
+  else
+    tmux new-session -s command-station -n commander \"claude --agent scatter\" 2>/dev/null || tmux attach -t command-station
+  fi
+}
 export PATH=\"$BIN_DIR:\$PATH\"
 $MARKER end"
 
@@ -112,5 +118,5 @@ fi
 echo ""
 echo "Scatter installed."
 echo ""
-echo "If you're in tmux, run /scatter to open a new command station."
-echo "Otherwise, run 'scatter' from your terminal (after: source $RC_FILE)."
+echo "Open a new terminal tab and run: scatter"
+echo "(You may need to run: source $RC_FILE)"

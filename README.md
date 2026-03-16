@@ -23,22 +23,15 @@ An "always on" multi-agent command station for Claude Code. You talk to Scatter 
 
 Requirements: [Claude Code](https://claude.ai/code), [tmux](https://github.com/tmux/tmux) (>= 3.0), Git. Works on macOS and Linux (on Windows, use WSL).
 
-Open Claude Code and paste this. Claude will do the rest.
-
-```
-Install scatter:
-run git clone https://github.com/benaan123/scatter.git ~/.claude/skills/scatter && cd ~/.claude/skills/scatter && ./setup
-then add a "scatter" section to CLAUDE.md with exactly these descriptions:
-- /scatter — Launch the command station (opens in tmux)
-- /spawn-team — Spawn a team lead in a tmux pane for parallel work
-- /station — Monitor and manage running teams (list, capture, kill, merge)
-- `scatter` shell command — launches the command station from terminal
+```bash
+git clone https://github.com/benaan123/scatter.git ~/.claude/skills/scatter
+cd ~/.claude/skills/scatter && ./setup
 ```
 
 ### What gets installed
 
 - Skill files (Markdown prompts) in `~/.claude/skills/scatter/`
-- Symlinks at `~/.claude/skills/scatter-launch`, `~/.claude/skills/spawn-team`, `~/.claude/skills/station` pointing into the scatter directory
+- Symlinks at `~/.claude/skills/spawn-team`, `~/.claude/skills/station` pointing into the scatter directory
 - Shell aliases: `scatter` (launches tmux command station) and `station` (team management CLI)
 - Everything lives inside `.claude/`. Nothing touches your PATH beyond the shell alias block.
 
@@ -46,19 +39,13 @@ then add a "scatter" section to CLAUDE.md with exactly these descriptions:
 
 ## Usage
 
-From your terminal:
+Open a new terminal tab and run:
 
 ```bash
 scatter
 ```
 
-Or from inside a Claude Code session (if you're in tmux):
-
-```
-/scatter
-```
-
-This opens the command station in a new tmux window. Your current session stays running — switch between them with `Ctrl-b n` / `Ctrl-b p`.
+This opens the command station in tmux. Switch between windows with `Ctrl-b n` / `Ctrl-b p`.
 
 Then just talk to it:
 
