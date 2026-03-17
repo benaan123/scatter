@@ -93,6 +93,7 @@ fi
 if [[ -n "$OUTPUT_PATH" ]]; then
     OUTPUT_PATH="${OUTPUT_PATH/#\~/$HOME}"
     mkdir -p "$OUTPUT_PATH"
+    SPAWN_DATE="$(date +%Y-%m-%d)"
     OUTPUT_FILE="${OUTPUT_PATH}/${NAME}.md"
     STATUS_FILE="${OUTPUT_PATH}/${NAME}.status.json"
     PROMPT="${PROMPT}
@@ -109,10 +110,15 @@ Format: {\"status\": \"running|blocked|done\", \"message\": \"brief status\", \"
 ## Output file
 When you finish your work, write a structured summary of your findings to: ${OUTPUT_FILE}
 
-Use this format:
+Use this format — start with YAML frontmatter, then the body:
+---
+date: ${SPAWN_DATE}
+team: ${NAME}
+status: completed | partial | blocked
+---
+
 # [Team Name] — Findings
 
-**Status:** completed | partial | blocked
 **Summary:** 1-2 sentence overview
 
 ## What was done
