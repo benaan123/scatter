@@ -223,6 +223,33 @@ cmd_layout() {
     echo "Re-tiled dashboard layout"
 }
 
+# --- Obsidian CLI auto-open ---
+OBSIDIAN_CLI="/Applications/Obsidian.app/Contents/MacOS/Obsidian"
+OBSIDIAN_JSON="${HOME}/Library/Application Support/obsidian/obsidian.json"
+
+obsidian_open() {
+    local file_path="$1"
+    [[ ! -x "$OBSIDIAN_CLI" ]] && return 0
+    [[ ! -f "$OBSIDIAN_JSON" ]] && return 0
+    [[ ! -f "$file_path" ]] && return 0
+
+    local vault_name="" rel_path=""
+    while IFS= read -r vpath; do
+        [[ -z "$vpath" ]] && continue
+        case "$file_path" in
+            "${vpath}"/*)
+                rel_path="${file_path#${vpath}/}"
+                vault_name="$(basename "$vpath")"
+                break
+                ;;
+        esac
+    done < <(python3 -c "import json; d=json.load(open('${OBSIDIAN_JSON}')); [print(v.get('path','')) for v in d.get('vaults',{}).values()]" 2>/dev/null)
+
+    if [[ -n "$vault_name" && -n "$rel_path" ]]; then
+        "$OBSIDIAN_CLI" vault="$vault_name" open path="$rel_path" newtab 2>/dev/null || true
+    fi
+}
+
 STATUS_DIR="/tmp/scatter-status"
 
 cmd_status() {
@@ -597,6 +624,7 @@ cmd_gather() {
         cat "$output_path"
         echo ""
         echo "=== end ==="
+        obsidian_open "$output_path"
         gathered_output="# $target — Findings\n\n$(cat "$output_path")"
     else
         # Gather all teams with output paths
@@ -636,6 +664,7 @@ cmd_gather() {
                 fi
                 cat "$output_path"
                 echo ""
+                obsidian_open "$output_path"
                 gathered_output="${gathered_output}\n\n## $team\n\n$(cat "$output_path")"
                 found=$((found + 1))
             else
@@ -835,6 +864,7 @@ cmd_poll() {
                     echo "=== $name ==="
                     cat "$output_path"
                     echo ""
+                    obsidian_open "$output_path"
                 elif [[ -n "$output_path" ]]; then
                     echo "=== $name === (output file not yet written: $output_path)"
                     echo ""
